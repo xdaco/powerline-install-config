@@ -263,7 +263,7 @@ problem would not show up.
 | | |
 | --- | --- |
 | **Debian 11** | End of life: its repositories are archived and `deb.debian.org` 404s on every package, so nothing can be installed. Pointed at `archive.debian.org` the native path does work — powerline installs and `powerline_gitstatus` imports. |
-| **openSUSE** (Leap 15, Tumbleweed) | No `zypper` branch, so it is detected as generic `linux`; neither `pipx` nor `python3` is present in the base image, so the pipx path cannot start. `powerline` *is* packaged for openSUSE, so a zypper branch would be straightforward to add. |
+| **openSUSE** (Leap 15, Tumbleweed) | Not a target, by choice. There is no `zypper` branch, so it falls through to generic `linux`, and the base image has neither `pipx` nor `python3`, so the pipx path cannot start. Listed here only so the behaviour is not mistaken for a bug. |
 | **Arch** | Untested — the official `archlinux` image is x86_64 only, so it cannot be pulled on an arm64 host. |
 
 ## Regenerating the screenshot
