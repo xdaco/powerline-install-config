@@ -71,6 +71,7 @@ POWERLINE_SPEC=powerline-status ./install.sh --mode=pipx
 | **macOS** | `brew install pipx`, then pipx | same as pipx — see below |
 | **Ubuntu / Debian** | `apt-get install pipx` (or `python3-pipx` on bullseye and older) | `apt-get install powerline` + `python3-powerline-gitstatus` |
 | **Fedora** | `dnf install pipx` | `dnf install powerline`; gitstatus falls back to pip |
+| **Rocky / AlmaLinux / RHEL** | `epel-release`, then `dnf install pipx` | `epel-release`, then `dnf install powerline` |
 | **NixOS** | reported, not installed | reported, not installed |
 | anything else | pipx if you have it | tells you to install it yourself |
 
@@ -79,6 +80,13 @@ only thing in homebrew-core matching the name is `powerline-go`, an unrelated Go
 reimplementation that does not read `config.json` or themes, so the
 configuration here would not apply to it. On macOS both `--mode` values
 therefore do the same thing: brew supplies pipx, pipx supplies powerline.
+
+**RHEL rebuilds need EPEL, and the script enables it.** Rocky, AlmaLinux,
+CentOS Stream and RHEL are detected as `fedora` — their `ID_LIKE` says `rhel`
+and `dnf` is the right tool — but their base repositories carry neither
+`powerline` nor `pipx`. Both are in EPEL, and `epel-release` is itself in the
+base repos, so the script installs it when it sees a RHEL rebuild. Nothing is
+fetched from outside the distribution. Fedora proper skips all of this.
 
 **NixOS installs nothing.** It is declarative, so the script prints what to
 declare — `environment.systemPackages`, Home Manager's `home.packages`, or a
@@ -232,6 +240,13 @@ Swap `pipx` for `native`, and the image for `debian:12`, `fedora:41` or
 | Ubuntu 24.04 | 11/11 | 11/11 |
 | Debian 12 | 11/11 | 11/11 |
 | Fedora 41 | 11/11 | 11/11 |
+| Ubuntu 22.04 | 11/11 | 11/11 |
+| Ubuntu 25.04 | 11/11 | 11/11 |
+| Debian 13 | 11/11 | 11/11 |
+| Fedora 40 | 11/11 | 11/11 |
+| Fedora 42 | 11/11 | 11/11 |
+| Rocky 9 | 11/11 | 11/11 |
+| AlmaLinux 9 | 11/11 | 11/11 |
 | Alpine 3 (busybox ash, no bash) | 11/11 | n/a — no apk recipe |
 | macOS | 11/11 | → pipx |
 | NixOS | reports declaratively, exits non-zero | same |
@@ -239,6 +254,17 @@ Swap `pipx` for `native`, and the image for `debian:12`, `fedora:41` or
 Alpine is not a supported target — there is no `apk` branch, so it is detected
 as generic `linux` — but `--mode=pipx` works there, which is what the suite
 covers.
+
+Every result above was measured on **aarch64**, so an x86-only packaging
+problem would not show up.
+
+### Known not to work
+
+| | |
+| --- | --- |
+| **Debian 11** | End of life: its repositories are archived and `deb.debian.org` 404s on every package, so nothing can be installed. Pointed at `archive.debian.org` the native path does work — powerline installs and `powerline_gitstatus` imports. |
+| **openSUSE** (Leap 15, Tumbleweed) | No `zypper` branch, so it is detected as generic `linux`; neither `pipx` nor `python3` is present in the base image, so the pipx path cannot start. `powerline` *is* packaged for openSUSE, so a zypper branch would be straightforward to add. |
+| **Arch** | Untested — the official `archlinux` image is x86_64 only, so it cannot be pulled on an arm64 host. |
 
 ## Regenerating the screenshot
 

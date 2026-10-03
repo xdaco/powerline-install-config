@@ -542,6 +542,48 @@ native_pkg_cmd_label() {
     esac
 }
 
+# Rocky, AlmaLinux, CentOS Stream and RHEL itself are detected as "fedora",
+# because their ID_LIKE says rhel and dnf is indeed the right tool -- but their
+# BASE repositories carry neither powerline nor pipx. Both are in EPEL, which is
+# itself packaged in base as epel-release. Measured on rockylinux:9 and
+# almalinux:9, where every install failed with "No matching Packages to list"
+# until EPEL was enabled; with it, powerline 2.8.4-1.el9 and pipx 1.2.1-2.el9
+# are both there. Fedora proper needs none of this, hence the ID != fedora test.
+is_rhel_rebuild() {
+    [ "$OS" = fedora ] || return 1
+    [ -r /etc/os-release ] || return 1
+    _irr_id=""; _irr_line=""
+    while IFS= read -r _irr_line; do
+        case "$_irr_line" in
+            ID=*) _irr_id="${_irr_line#ID=}"
+                  _irr_id="${_irr_id%\"}"; _irr_id="${_irr_id#\"}" ;;
+        esac
+    done < /etc/os-release
+    [ -n "$_irr_id" ] && [ "$_irr_id" != fedora ]
+}
+
+# Enabling EPEL is itself a plain dnf install from a repository that IS enabled,
+# so this needs no third-party URL and nothing is fetched from outside the
+# distribution.
+ensure_epel() {
+    is_rhel_rebuild || return 0
+    if dnf repolist enabled 2>/dev/null | grep -qi epel; then
+        ok "EPEL already enabled"
+        return 0
+    fi
+    _ee_SUDO="$(sudo_prefix)"
+    info "enabling EPEL — powerline and pipx are not in this system's base repositories"
+    if run ${_ee_SUDO:+$_ee_SUDO} dnf install -y epel-release; then
+        ok "EPEL enabled"
+        return 0
+    fi
+    warn "could not install epel-release"
+    step "on this distribution powerline and pipx live in EPEL. Enable it with:"
+    step "    sudo dnf install epel-release"
+    step "or re-run with --mode=pipx once pipx is available another way."
+    return 1
+}
+
 # sudo is needed for the distro package manager, and only there. NixOS installs
 # nothing imperatively and macOS uses brew, which refuses to run under sudo.
 sudo_prefix() {
@@ -595,7 +637,13 @@ install_pipx() {
             run ${_ipx_SUDO:+$_ipx_SUDO} apt-get install -y pipx \
                 || run ${_ipx_SUDO:+$_ipx_SUDO} apt-get install -y python3-pipx || true ;;
         fedora)
-            run ${_ipx_SUDO:+$_ipx_SUDO} dnf install -y pipx || true ;;
+            ensure_epel || true
+            run ${_ipx_SUDO:+$_ipx_SUDO} dnf install -y pipx || true
+            # RHEL rebuilds ship python3 without the pip module, so the generic
+            # "python3 -m pip install --user pipx" fallback below cannot run
+            # either unless pip is installed first.
+            command -v pipx >/dev/null 2>&1 \
+                || run ${_ipx_SUDO:+$_ipx_SUDO} dnf install -y python3-pip || true ;;
         nixos)
             warn "pipx is not installed and NixOS installs declaratively"
             nixos_help "pipx"
@@ -673,9 +721,12 @@ install_powerline_native() {
             run ${_ipn_SUDO:+$_ipn_SUDO} apt-get install -y powerline \
                 || { warn "apt could not install powerline"; return 1; } ;;
         fedora)
+            ensure_epel || true
             info "installing powerline with dnf"
             run ${_ipn_SUDO:+$_ipn_SUDO} dnf install -y powerline \
-                || { warn "dnf could not install powerline"; return 1; } ;;
+                || { warn "dnf could not install powerline"
+                     is_rhel_rebuild && step "powerline is in EPEL on this distribution — see above"
+                     return 1; } ;;
         nixos)
             warn "powerline is not installed and NixOS installs declaratively"
             nixos_help "powerline"

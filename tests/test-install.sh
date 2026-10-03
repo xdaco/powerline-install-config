@@ -101,7 +101,15 @@ echo "### 7. the entry install.sh prints is sourceable"
 # Debian keeps bindings under .../powerline/bindings/, Fedora under
 # /usr/share/powerline/ with no bindings component.
 B=""
+# Ubuntu 22.04 ships pipx 1.0.0, which has no "environment" subcommand at all,
+# so this has to fall back the same way install.sh's pipx_venv() does -- older
+# pipx keeps venvs in ~/.local/pipx, newer in ~/.local/share/pipx.
 PH="$(pipx environment --value PIPX_HOME 2>/dev/null || true)"
+if [ -z "$PH" ]; then
+    for cand in "${PIPX_HOME:-}" "$HOME/.local/share/pipx" "$HOME/.local/pipx"; do
+        [ -n "$cand" ] && [ -d "$cand/venvs" ] && { PH="$cand"; break; }
+    done
+fi
 # A glob, not ls: the quoted "$PH" keeps a pipx home containing spaces whole
 # (macOS defaults to ~/Library/Application Support/pipx) while python3* still
 # expands. Last match wins, which is the highest python version.
