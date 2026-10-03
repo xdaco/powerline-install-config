@@ -1,0 +1,8 @@
+# OS artifacts — this repo is cloned onto macOS, Linux and WSL, so each
+# platform's file manager leaves its own litter here.
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
