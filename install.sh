@@ -208,6 +208,22 @@ case "$MODE" in
     *) die "--mode must be 'pipx' or 'native', not '$MODE'" ;;
 esac
 
+# Does cmp exist? It lives in diffutils, which a minimal Fedora image does NOT
+# ship -- measured on fedora:41, where every file came back "differs" because
+# "command not found" is a non-zero exit, so a correct install looked entirely
+# wrong and nothing was ever idempotent. cksum is coreutils and is always there,
+# so it is the fallback rather than the primary: cmp compares bytes and stops at
+# the first difference, cksum reads both files whole and compares a checksum.
+if command -v cmp >/dev/null 2>&1; then HAVE_CMP=1; else HAVE_CMP=0; fi
+files_same() {
+    [ -f "$1" ] && [ -f "$2" ] || return 1
+    if [ "$HAVE_CMP" -eq 1 ]; then
+        cmp -s "$1" "$2"
+        return $?
+    fi
+    [ "$(cksum < "$1")" = "$(cksum < "$2")" ]
+}
+
 # ------------------------------------------------- finding what we built -----
 # Follow symlinks by hand: "readlink -f" is GNU only and macOS ships BSD
 # readlink, which has no -f. Bounded rather than loop-detecting -- ten hops is
@@ -255,13 +271,21 @@ binding_dirs() {
     if [ -n "$daemon" ]; then
         root="$(dirname "$(dirname "$(resolve_real "$daemon")")")"
     fi
+    # Emitted as whole lines rather than through a ${root:+...} inside an
+    # unquoted printf list: a pipx home can contain spaces (macOS pipx defaults
+    # to ~/Library/Application Support/pipx), and word splitting there dropped
+    # the owning install from the list entirely.
+    if [ -n "$root" ]; then
+        printf '%s\n' "$root/lib/python3*/site-packages/powerline/bindings"
+        printf '%s\n' "$root/share/powerline/bindings"
+        printf '%s\n' "$root/share/powerline"
+    fi
     printf '%s\n' \
-        ${root:+"$root/lib/python3*/site-packages/powerline/bindings"} \
-        ${root:+"$root/share/powerline/bindings"} \
         "$HOME/.local/pipx/venvs/powerline-status/lib/python3*/site-packages/powerline/bindings" \
         "$HOME/.local/share/pipx/venvs/powerline-status/lib/python3*/site-packages/powerline/bindings" \
         "$HOME/.local/lib/python3*/site-packages/powerline/bindings" \
         "/usr/share/powerline/bindings" \
+        "/usr/share/powerline" \
         "/usr/lib/python3*/site-packages/powerline/bindings" \
         "/usr/lib/python3*/dist-packages/powerline/bindings" \
         "/usr/local/lib/python3*/site-packages/powerline/bindings" \
@@ -277,13 +301,22 @@ binding_dirs() {
 # glob sorts ascending, so that is the highest python version rather than the
 # oldest interpreter on the box.
 find_binding() {
-    local rel="$1" pat hit c
+    local rel="$1" pat hit c oldifs
     while IFS= read -r pat; do
         [ -n "$pat" ] || continue
         hit=""
+        # IFS emptied around the glob: the pattern must still undergo pathname
+        # expansion but must NOT be split on whitespace. With the default IFS,
+        # a venv under "Application Support" split into two broken words, every
+        # candidate failed, and the search fell through to whatever OTHER
+        # powerline was on the box -- pairing one install's daemon with another
+        # install's bindings. Measured on macOS with a pipx home under
+        # ~/Library/Application Support.
+        oldifs="$IFS"; IFS=''
         for c in $pat/$rel; do
             [ -r "$c" ] && hit="$c"
         done
+        IFS="$oldifs"
         if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi
     done < <(binding_dirs)
     return 1
@@ -357,13 +390,28 @@ doctor() {
     fi
 
     head2 "bindings"
-    for binding in bash/powerline.sh zsh/powerline.zsh tmux/powerline.conf; do
-        if find_binding "$binding" >/dev/null 2>&1; then
-            ok "$(printf '%-20s' "${binding%%/*}")$(find_binding "$binding")"
+    # A missing tmux binding is a note, not a fault: Fedora's powerline package
+    # ships bash and zsh only (measured on fedora:41), and someone who does not
+    # use tmux has nothing wrong with their install. What WOULD be broken is
+    # having no shell binding at all, so that is what sets rc.
+    local shell_bindings=0 found
+    for binding in bash/powerline.sh zsh/powerline.zsh; do
+        if found="$(find_binding "$binding")"; then
+            ok "$(printf '%-20s' "${binding%%/*}")$found"
+            shell_bindings=$((shell_bindings + 1))
         else
-            warn "no binding found for ${binding%%/*}"; rc=1
+            warn "no binding found for ${binding%%/*}"
+            notes=1
         fi
     done
+    if [ "$shell_bindings" -eq 0 ]; then
+        warn "no shell binding at all — the prompt cannot be wired up"; rc=1
+    fi
+    if found="$(find_binding tmux/powerline.conf)"; then
+        ok "$(printf '%-20s' tmux)$found"
+    else
+        step "tmux                 not shipped by this powerline (fine unless you use tmux)"
+    fi
 
     head2 "configuration"
     if [ -L "$CONFIG_DST" ] || [ -L "$CONFIG_DST/config.json" ]; then
@@ -381,7 +429,7 @@ doctor() {
     for rel in config.json colorschemes/default.json themes/shell/mine.json themes/shell/__main__.json; do
         if [ ! -e "$CONFIG_DST/$rel" ]; then
             warn "missing              $rel"; rc=1
-        elif ! cmp -s "$CONFIG_SRC/$rel" "$CONFIG_DST/$rel" 2>/dev/null; then
+        elif ! files_same "$CONFIG_SRC/$rel" "$CONFIG_DST/$rel"; then
             warn "differs from repo    $rel"; rc=1
         fi
     done
@@ -428,9 +476,13 @@ select_mode() {
     fi
 
     if [ "$OS" = macos ]; then
-        [ -n "$MODE" ] || MODE=native
         info "macOS: Homebrew has no powerline formula (only the unrelated powerline-go)"
         step "brew supplies pipx, pipx supplies powerline — both --mode values do this here"
+        # Resolved to pipx, not merely described as equivalent. Leaving MODE as
+        # "native" sent main() into install_powerline_native, which has no macos
+        # case and fell through to "no package recipe for 'macos'" -- so
+        # --mode=native on a Mac installed nothing at all.
+        MODE=pipx
         return 0
     fi
 
@@ -605,7 +657,18 @@ install_powerline_native() {
                 || { warn "dnf could not install powerline"; return 1; } ;;
         nixos)
             warn "powerline is not installed and NixOS installs declaratively"
-            nixos_help "powerline python3Packages.powerline-gitstatus"
+            nixos_help "powerline"
+            # Verified against nixpkgs: powerline, powerline-fonts,
+            # powerline-symbols and pipx all exist; powerline-gitstatus does
+            # NOT, under any attribute (nixpkgs.gitstatus is romkatv's unrelated
+            # tool). So native mode cannot produce a working prompt here,
+            # because the theme imports powerline_gitstatus.
+            warn "powerline-gitstatus is not in nixpkgs, and this theme requires it"
+            step "native mode therefore cannot give you a working prompt on NixOS."
+            step "Declare pipx instead and re-run with --mode=pipx, which builds"
+            step "the plugin into powerline's own venv:"
+            step ""
+            step "    environment.systemPackages = with pkgs; [ pipx ];"
             return 1 ;;
         *)
             warn "no package recipe for '$OS' — install powerline with your package manager,"
@@ -628,8 +691,12 @@ install_gitstatus_native() {
     fi
     local SUDO; SUDO="$(sudo_prefix)"
 
-    # Fedora packages it; Debian and Ubuntu do not, but asking costs nothing and
-    # a distro package is the only version that survives a python upgrade.
+    # Measured, because it is the opposite of what you would guess: Debian 12
+    # and Ubuntu 24.04 DO package it (python3-powerline-gitstatus 1.3.2-1),
+    # Fedora 41 does NOT -- it ships powerline and powerline-fonts only. So apt
+    # usually succeeds here and dnf usually falls through to pip below. Both are
+    # attempted regardless; a distro package is the only version that survives a
+    # python upgrade.
     case "$OS" in
         fedora)        run ${SUDO:+$SUDO} dnf install -y powerline-gitstatus 2>/dev/null || true ;;
         debian|ubuntu) run ${SUDO:+$SUDO} apt-get install -y python3-powerline-gitstatus 2>/dev/null || true ;;
@@ -639,6 +706,27 @@ install_gitstatus_native() {
         return 0
     fi
 
+    # No pip at all is a fixable state, not a dead end: Fedora's base image
+    # simply omits python3-pip, and once it is there "pip install --user"
+    # succeeds -- Fedora does not refuse --user installs the way Debian does.
+    # Measured on fedora:41, where this is the difference between native mode
+    # working and native mode giving up.
+    if ! "$py" -m pip --version >/dev/null 2>&1; then
+        # Announced only where there is actually a package manager to do it
+        # with: on NixOS this said "installing the distro's pip package" and
+        # then installed nothing, which is a plain untruth in the output.
+        case "$OS" in
+            fedora)
+                info "that python has no pip; installing python3-pip"
+                run ${SUDO:+$SUDO} dnf install -y python3-pip || true ;;
+            debian|ubuntu)
+                info "that python has no pip; installing python3-pip"
+                run ${SUDO:+$SUDO} apt-get install -y python3-pip || true ;;
+            *)
+                step "that python has no pip, and there is no package recipe for '$OS'" ;;
+        esac
+    fi
+
     info "installing powerline-gitstatus with pip --user"
     if run "$py" -m pip install --user powerline-gitstatus 2>/dev/null; then
         ok "powerline-gitstatus installed"
@@ -646,9 +734,16 @@ install_gitstatus_native() {
     fi
 
     warn "pip would not install powerline-gitstatus into the system python"
-    step "This is PEP 668: your python is externally managed, so pip refuses to"
-    step "write to it. The theme in this repo NEEDS this plugin — without it every"
-    step "prompt renders an exception instead of your git branch."
+    if ! "$py" -m pip --version >/dev/null 2>&1; then
+        # Fedora splits pip into python3-pip and the base image omits it.
+        step "That python has no pip at all ($py -m pip is missing)."
+        step "Install your distro's python3-pip, or use --mode=pipx."
+    else
+        step "This is PEP 668: your python is externally managed, so pip refuses to"
+        step "write to it."
+    fi
+    step "The theme in this repo NEEDS this plugin — without it every prompt"
+    step "renders an exception instead of your git branch."
     step ""
     step "Three ways out, best first:"
     step "  1. re-run with --mode=pipx, which sidesteps the system python entirely"
@@ -690,7 +785,7 @@ apply_config() {
         src="$CONFIG_SRC/$rel"
         dst="$CONFIG_DST/$rel"
         if [ -e "$dst" ] || [ -L "$dst" ]; then
-            if [ ! -L "$dst" ] && cmp -s "$src" "$dst" 2>/dev/null; then
+            if [ ! -L "$dst" ] && files_same "$src" "$dst"; then
                 step "unchanged  $rel"
                 continue
             fi
@@ -701,7 +796,7 @@ apply_config() {
         run mkdir -p "$(dirname "$dst")"
         run cp "$src" "$dst"
         step "installed  $rel"
-    done < <(cd "$CONFIG_SRC" && find . -type f)
+    done < <(cd "$CONFIG_SRC" && find . -type f -name '*.json')
     ok "config applied"
     [ -d "$BACKUP_DIR" ] && step "what was there before is in $BACKUP_DIR"
     return 0
@@ -726,6 +821,16 @@ install_fonts() {
         step "  2. run install.ps1 in an elevated PowerShell, or right-click the"
         step "     .ttf/.otf files and choose Install"
         step "  3. pick the installed font in Windows Terminal → Settings → your profile"
+        return 0
+    fi
+
+    if [ "$OS" = nixos ]; then
+        warn "NixOS manages fonts declaratively — not cloning them into your home"
+        step "add to /etc/nixos/configuration.nix:"
+        step ""
+        step "    fonts.packages = with pkgs; [ powerline-fonts powerline-symbols ];"
+        step ""
+        step "then:  sudo nixos-rebuild switch"
         return 0
     fi
 
@@ -765,6 +870,13 @@ install_fonts() {
         rm -rf "$tmp"; trap - EXIT
         return 1
     fi
+    # The fonts repo's own installer creates the directory on Linux but not on
+    # Darwin, so a home without ~/Library/Fonts yet got "fonts installed" and no
+    # fonts. Create it here rather than patching their script.
+    case "$OS" in
+        macos) mkdir -p "$HOME/Library/Fonts" ;;
+        *)     mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/fonts" ;;
+    esac
     sh "$tmp/fonts/install.sh" "$FONTS" || warn "the font installer reported a problem"
     rm -rf "$tmp"; trap - EXIT
     ok "fonts installed"

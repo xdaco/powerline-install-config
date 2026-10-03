@@ -35,6 +35,7 @@ they differ in *whose* python ends up carrying powerline.
 | Version | `xdaco/powerline` @ `2.8.4-py314` | Whatever the distro ships, upstream |
 | System python | Untouched | Used |
 | gitstatus | `pipx inject`, into the same venv | Must reach the system python |
+| Shell bindings | in the venv | `/usr/share/powerline/bindings` (Debian) or `/usr/share/powerline` (Fedora) |
 
 ```bash
 ./install.sh --mode=pipx      # skip the question
@@ -63,8 +64,8 @@ POWERLINE_SPEC=powerline-status ./install.sh --mode=pipx
 | OS | pipx mode | native mode |
 | --- | --- | --- |
 | **macOS** | `brew install pipx`, then pipx | same as pipx — see below |
-| **Ubuntu / Debian** | `apt-get install pipx` (or `python3-pipx` on bullseye and older) | `apt-get install powerline` |
-| **Fedora** | `dnf install pipx` | `dnf install powerline` |
+| **Ubuntu / Debian** | `apt-get install pipx` (or `python3-pipx` on bullseye and older) | `apt-get install powerline` + `python3-powerline-gitstatus` |
+| **Fedora** | `dnf install pipx` | `dnf install powerline`; gitstatus falls back to pip |
 | **NixOS** | reported, not installed | reported, not installed |
 | anything else | pipx if you have it | tells you to install it yourself |
 
@@ -77,6 +78,17 @@ therefore do the same thing: brew supplies pipx, pipx supplies powerline.
 **NixOS installs nothing.** It is declarative, so the script prints what to
 declare — `environment.systemPackages`, Home Manager's `home.packages`, or a
 one-off `nix-shell -p` — and stops. Editing `configuration.nix` is yours.
+
+On NixOS, use `--mode=pipx`. Checked against nixpkgs: `powerline`, `pipx`,
+`powerline-fonts` and `powerline-symbols` all exist, but **`powerline-gitstatus`
+does not**, under any attribute — so native mode cannot produce a working prompt
+there, because this theme imports it. Declaring `pipx` and running
+`--mode=pipx` builds the plugin into powerline's own venv and sidesteps that.
+Fonts are declarative too:
+
+```nix
+fonts.packages = with pkgs; [ powerline-fonts powerline-symbols ];
+```
 
 ## The configuration
 
@@ -218,12 +230,21 @@ to do that yet — that hand-off is a separate commit over there.
 
 ## Troubleshooting
 
-**`externally-managed-environment` in native mode.** PEP 668: Debian 12+ and
-Fedora 38+ mark the system python as distro-managed, so pip refuses to write to
-it — which is where native mode has to put `powerline-gitstatus`. The script
-prints the options and stops rather than forcing `--break-system-packages`
-behind your back. Best fix is `--mode=pipx`, which does not involve the system
-python at all.
+**Native mode cannot install `powerline-gitstatus`.** Where it lands depends on
+the distro, and it is the opposite of what you would expect:
+
+| | `powerline` | `powerline-gitstatus` | Result |
+| --- | --- | --- | --- |
+| Ubuntu 24.04 | yes | yes, `python3-powerline-gitstatus` | works |
+| Debian 12 | yes, 2.8.3-4 | yes, 1.3.2-1 | works |
+| Fedora 41 | yes, 2.8.4-5 | **not packaged** | falls back to pip |
+
+On Fedora the fallback is `pip install --user`, which fails for one of two
+reasons the script tells apart: PEP 668 (an externally-managed python refusing
+to be written to) or no `pip` module at all — the Fedora base image omits
+`python3-pip` entirely. Either way the script prints the options, including
+`--mode=pipx`, and stops rather than forcing `--break-system-packages` behind
+your back.
 
 **The prompt shows a traceback instead of a branch.** `powerline_gitstatus` is
 not importable by the python rendering the prompt. `./install.sh --check` says
