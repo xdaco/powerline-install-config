@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #title          :install.sh
 #description    :Install powerline, apply this repo's config, print the shell entry
 #author         :Musarraf Hossain
@@ -7,7 +7,7 @@
 #version        :2.0
 #usage          :./install.sh [--mode=pipx|native] [--fonts=PREFIX] [--dry-run|--check]
 #notes          :Safe to re-run; anything in the way is backed up, never overwritten
-#shell          :bash 3.2+ (macOS ships 3.2)
+#shell          :POSIX sh — no bashisms (runs under dash, busybox ash, ksh, bash)
 #==============================================================================
 # install.sh — set up powerline on macOS, Ubuntu, Debian, Fedora or NixOS.
 #
@@ -27,9 +27,10 @@
 # Re-running is safe. Anything in ~/.config/powerline that would be overwritten
 # is moved to ~/.powerline-backup-<timestamp>/ first; nothing is deleted.
 
-set -euo pipefail
+set -eu
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1007  # CDPATH= is a deliberate per-command assignment
+REPO_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 CONFIG_SRC="$REPO_DIR/config"
 CONFIG_DST="${XDG_CONFIG_HOME:-$HOME/.config}/powerline"
 BACKUP_DIR="$HOME/.powerline-backup-$(date +%Y%m%d-%H%M%S)"
@@ -48,8 +49,10 @@ FONTS_REPO="${POWERLINE_FONTS_REPO:-https://github.com/xdaco/powerline-fonts.git
 
 # ------------------------------------------------------------- output --------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
-    C_RST=$'\033[0m'; C_B=$'\033[1m'; C_GRN=$'\033[32m'
-    C_YLW=$'\033[33m'; C_RED=$'\033[31m'; C_CYN=$'\033[36m'
+    _esc=$(printf '\033')
+    C_RST="${_esc}[0m";  C_B="${_esc}[1m";   C_GRN="${_esc}[32m"
+    C_YLW="${_esc}[33m"; C_RED="${_esc}[31m"; C_CYN="${_esc}[36m"
+    unset _esc
 else
     C_RST=''; C_B=''; C_GRN=''; C_YLW=''; C_RED=''; C_CYN=''
 fi
@@ -74,10 +77,10 @@ run() {
 confirm() {
     [ "$ASSUME_YES" -eq 1 ] && return 0
     [ "$INTERACTIVE" -eq 1 ] || return 1
-    local reply
+    _cf_reply=""
     printf '%s [y/N] ' "$1" >&2
-    read -r reply || return 1
-    case "$reply" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
+    read -r _cf_reply || return 1
+    case "$_cf_reply" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
 }
 
 # ---------------------------------------------------------- detection --------
@@ -92,17 +95,17 @@ detect_os() {
     case "$(uname -s)" in
         Darwin) printf 'macos' ;;
         Linux)
-            local id="" line v
+            _do_id=""; _do_line=""; _do_v=""
             if [ -r /etc/os-release ]; then
-                while IFS= read -r line; do
-                    case "$line" in
+                while IFS= read -r _do_line; do
+                    case "$_do_line" in
                         ID=*|ID_LIKE=*)
-                            v="${line#*=}"; v="${v%\"}"; v="${v#\"}"
-                            id="$id $v" ;;
+                            _do_v="${_do_line#*=}"; _do_v="${_do_v%\"}"; _do_v="${_do_v#\"}"
+                            _do_id="$_do_id $_do_v" ;;
                     esac
                 done < /etc/os-release
             fi
-            case " $id " in
+            case " $_do_id " in
                 *nixos*)           printf 'nixos'  ;;
                 *fedora*|*rhel*)   printf 'fedora' ;;
                 *ubuntu*)          printf 'ubuntu' ;;
@@ -134,10 +137,10 @@ OS="$(detect_os)"
 # makes every "is it already installed?" check below answer no. Resolved at call
 # time because pipx itself may be installed by this script.
 pipx_venv() {
-    local home
-    home="$(pipx environment --value PIPX_HOME 2>/dev/null)" || home=""
-    [ -n "$home" ] || home="${PIPX_HOME:-$HOME/.local/share/pipx}"
-    printf '%s/venvs/%s\n' "$home" "$1"
+    _pv_home=""
+    _pv_home="$(pipx environment --value PIPX_HOME 2>/dev/null)" || _pv_home=""
+    [ -n "$_pv_home" ] || _pv_home="${PIPX_HOME:-$HOME/.local/share/pipx}"
+    printf '%s/venvs/%s\n' "$_pv_home" "$1"
 }
 
 # ------------------------------------------------------------ options --------
@@ -229,16 +232,16 @@ files_same() {
 # readlink, which has no -f. Bounded rather than loop-detecting -- ten hops is
 # already absurd for a shim.
 resolve_real() {
-    local p="$1" link hops=0
-    while [ -L "$p" ] && [ "$hops" -lt 10 ]; do
-        link="$(readlink "$p")"
-        case "$link" in
-            /*) p="$link" ;;
-            *)  p="$(dirname "$p")/$link" ;;
+    _rr_p="$1"; _rr_link=""; _rr_hops=0
+    while [ -L "$_rr_p" ] && [ "$_rr_hops" -lt 10 ]; do
+        _rr_link="$(readlink "$_rr_p")"
+        case "$_rr_link" in
+            /*) _rr_p="$_rr_link" ;;
+            *)  _rr_p="$(dirname "$_rr_p")/$_rr_link" ;;
         esac
-        hops=$((hops + 1))
+        _rr_hops=$((_rr_hops + 1))
     done
-    printf '%s' "$p"
+    printf '%s' "$_rr_p"
 }
 
 # Which powerline-daemon will actually run, preferring the one we just
@@ -247,10 +250,10 @@ find_daemon() {
     if [ -n "${POWERLINE_BIN:-}" ] && [ -x "$POWERLINE_BIN/powerline-daemon" ]; then
         printf '%s' "$POWERLINE_BIN/powerline-daemon"; return 0
     fi
-    local venv
-    venv="$(pipx_venv powerline-status)"
-    if [ -x "$venv/bin/powerline-daemon" ]; then
-        printf '%s' "$venv/bin/powerline-daemon"; return 0
+    _fd_venv=""
+    _fd_venv="$(pipx_venv powerline-status)"
+    if [ -x "$_fd_venv/bin/powerline-daemon" ]; then
+        printf '%s' "$_fd_venv/bin/powerline-daemon"; return 0
     fi
     if [ -x "$LOCAL_BIN/powerline-daemon" ]; then
         printf '%s' "$LOCAL_BIN/powerline-daemon"; return 0
@@ -266,19 +269,20 @@ find_daemon() {
 # for the distro package -- it is NOT under site-packages, which is why a
 # site-packages-only search finds nothing in native mode on those systems.
 binding_dirs() {
-    local root=""
-    local daemon; daemon="$(find_daemon)" || daemon=""
-    if [ -n "$daemon" ]; then
-        root="$(dirname "$(dirname "$(resolve_real "$daemon")")")"
+    _bd_root=""
+    _bd_daemon=""
+    _bd_daemon="$(find_daemon)" || _bd_daemon=""
+    if [ -n "$_bd_daemon" ]; then
+        _bd_root="$(dirname "$(dirname "$(resolve_real "$_bd_daemon")")")"
     fi
     # Emitted as whole lines rather than through a ${root:+...} inside an
     # unquoted printf list: a pipx home can contain spaces (macOS pipx defaults
     # to ~/Library/Application Support/pipx), and word splitting there dropped
     # the owning install from the list entirely.
-    if [ -n "$root" ]; then
-        printf '%s\n' "$root/lib/python3*/site-packages/powerline/bindings"
-        printf '%s\n' "$root/share/powerline/bindings"
-        printf '%s\n' "$root/share/powerline"
+    if [ -n "$_bd_root" ]; then
+        printf '%s\n' "$_bd_root/lib/python3*/site-packages/powerline/bindings"
+        printf '%s\n' "$_bd_root/share/powerline/bindings"
+        printf '%s\n' "$_bd_root/share/powerline"
     fi
     printf '%s\n' \
         "$HOME/.local/pipx/venvs/powerline-status/lib/python3*/site-packages/powerline/bindings" \
@@ -301,45 +305,62 @@ binding_dirs() {
 # glob sorts ascending, so that is the highest python version rather than the
 # oldest interpreter on the box.
 find_binding() {
-    local rel="$1" pat hit c oldifs
-    while IFS= read -r pat; do
-        [ -n "$pat" ] || continue
-        hit=""
-        # IFS emptied around the glob: the pattern must still undergo pathname
-        # expansion but must NOT be split on whitespace. With the default IFS,
-        # a venv under "Application Support" split into two broken words, every
-        # candidate failed, and the search fell through to whatever OTHER
-        # powerline was on the box -- pairing one install's daemon with another
-        # install's bindings. Measured on macOS with a pipx home under
-        # ~/Library/Application Support.
-        oldifs="$IFS"; IFS=''
-        for c in $pat/$rel; do
-            [ -r "$c" ] && hit="$c"
+    _fb_rel="$1"
+    _fb_hit=""
+    _fb_oldifs="$IFS"
+
+    # Two opposite expansion rules are needed in the same function, which is why
+    # this is fiddly. Splitting the candidate list: split on newlines and do NOT
+    # glob, because the patterns contain * and must reach the inner loop intact.
+    set -f
+    IFS='
+'
+    # shellcheck disable=SC2046  # splitting on newlines is exactly the intent
+    set -- $(binding_dirs)
+    IFS="$_fb_oldifs"
+    set +f
+
+    for _fb_pat in "$@"; do
+        [ -n "$_fb_pat" ] || continue
+        # Matching one entry: glob, but do NOT split. IFS is emptied because the
+        # pattern must still undergo pathname expansion while a path containing
+        # a space stays one word. With the default IFS a venv under "Application
+        # Support" split into two broken words, every candidate failed, and the
+        # search fell through to whatever OTHER powerline was on the box --
+        # pairing one install's daemon with another install's bindings.
+        IFS=''
+        # No break in the inner loop on purpose: within one directory the LAST
+        # match wins, and a glob sorts ascending, so that is the highest python
+        # version rather than the oldest interpreter on the box.
+        for _fb_c in $_fb_pat/$_fb_rel; do
+            [ -r "$_fb_c" ] && _fb_hit="$_fb_c"
         done
-        IFS="$oldifs"
-        if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi
-    done < <(binding_dirs)
-    return 1
+        IFS="$_fb_oldifs"
+        [ -n "$_fb_hit" ] && break
+    done
+
+    [ -n "$_fb_hit" ] || return 1
+    printf '%s' "$_fb_hit"
 }
 
 # The python that imports the powerline segments -- which is the one that has to
 # be able to import powerline_gitstatus. For a pipx install that is the venv's
 # python; for a distro package it is the system python the daemon's shebang names.
 powerline_python() {
-    local venv daemon first
-    venv="$(pipx_venv powerline-status)"
-    [ -x "$venv/bin/python" ] && { printf '%s' "$venv/bin/python"; return 0; }
-    daemon="$(find_daemon)" || return 1
-    first="$(head -1 "$(resolve_real "$daemon")" 2>/dev/null || true)"
-    case "$first" in
+    _pp_venv=""; _pp_daemon=""; _pp_first=""
+    _pp_venv="$(pipx_venv powerline-status)"
+    [ -x "$_pp_venv/bin/python" ] && { printf '%s' "$_pp_venv/bin/python"; return 0; }
+    _pp_daemon="$(find_daemon)" || return 1
+    _pp_first="$(head -n 1 "$(resolve_real "$_pp_daemon")" 2>/dev/null || true)"
+    case "$_pp_first" in
         '#!'*)
-            first="${first#\#!}"
+            _pp_first="${_pp_first#\#!}"
             # "#!/usr/bin/env python3" -> take the argument, not /usr/bin/env
-            case "$first" in */env\ *) first="${first#*env }" ;; esac
+            case "$_pp_first" in */env\ *) _pp_first="${_pp_first#*env }" ;; esac
             # Unquoted on purpose: a shebang's interpreter and its argument
             # are one string here and have to be split back apart.
             # shellcheck disable=SC2086
-            set -- $first
+            set -- $_pp_first
             [ -x "${1:-}" ] && { printf '%s' "$1"; return 0; } ;;
     esac
     command -v python3 2>/dev/null || return 1
@@ -354,18 +375,18 @@ doctor() {
     # true that you should know". A config stowed from the dotfiles repo is the
     # second kind, and reporting it as the first would make --check fail on every
     # machine that is set up correctly.
-    local rc=0 notes=0 daemon py binding fontdir
+    _d_rc=0; _d_notes=0; _d_daemon=""; _d_py=""; _d_binding=""; _d_fontdir=""
 
     head2 "system"
     step "detected OS          $OS$(is_wsl && printf ' (WSL)' || true)"
     step "powerline spec       $POWERLINE_SPEC"
 
     head2 "powerline"
-    if daemon="$(find_daemon)"; then
-        ok "powerline-daemon     $daemon"
-        step "resolves to          $(resolve_real "$daemon")"
+    if _d_daemon="$(find_daemon)"; then
+        ok "powerline-daemon     $_d_daemon"
+        step "resolves to          $(resolve_real "$_d_daemon")"
     else
-        warn "no powerline-daemon on PATH or in a pipx venv"; rc=1
+        warn "no powerline-daemon on PATH or in a pipx venv"; _d_rc=1
     fi
     if [ -d "$(pipx_venv powerline-status)" ]; then
         ok "pipx venv            $(pipx_venv powerline-status)"
@@ -376,17 +397,17 @@ doctor() {
     head2 "powerline-gitstatus"
     # The theme references powerline_gitstatus.gitstatus, so this is not
     # optional: without it every prompt renders an exception instead of a branch.
-    if py="$(powerline_python)"; then
-        step "python               $py"
-        if "$py" -c 'import powerline_gitstatus' 2>/dev/null; then
+    if _d_py="$(powerline_python)"; then
+        step "python               $_d_py"
+        if "$_d_py" -c 'import powerline_gitstatus' 2>/dev/null; then
             ok "importable           yes"
         else
             warn "powerline_gitstatus is NOT importable by the python that renders the prompt"
             step "the theme in this repo needs it; the prompt will show an error without it"
-            rc=1
+            _d_rc=1
         fi
     else
-        warn "could not work out which python renders the prompt"; rc=1
+        warn "could not work out which python renders the prompt"; _d_rc=1
     fi
 
     head2 "bindings"
@@ -394,73 +415,73 @@ doctor() {
     # ships bash and zsh only (measured on fedora:41), and someone who does not
     # use tmux has nothing wrong with their install. What WOULD be broken is
     # having no shell binding at all, so that is what sets rc.
-    local shell_bindings=0 found
-    for binding in bash/powerline.sh zsh/powerline.zsh; do
-        if found="$(find_binding "$binding")"; then
-            ok "$(printf '%-20s' "${binding%%/*}")$found"
-            shell_bindings=$((shell_bindings + 1))
+    _d_shell_bindings=0; _d_found=""
+    for _d_binding in bash/powerline.sh zsh/powerline.zsh; do
+        if _d_found="$(find_binding "$_d_binding")"; then
+            ok "$(printf '%-20s' "${_d_binding%%/*}")$_d_found"
+            _d_shell_bindings=$((_d_shell_bindings + 1))
         else
-            warn "no binding found for ${binding%%/*}"
-            notes=1
+            warn "no binding found for ${_d_binding%%/*}"
+            _d_notes=1
         fi
     done
-    if [ "$shell_bindings" -eq 0 ]; then
-        warn "no shell binding at all — the prompt cannot be wired up"; rc=1
+    if [ "$_d_shell_bindings" -eq 0 ]; then
+        warn "no shell binding at all — the prompt cannot be wired up"; _d_rc=1
     fi
-    if found="$(find_binding tmux/powerline.conf)"; then
-        ok "$(printf '%-20s' tmux)$found"
+    if _d_found="$(find_binding tmux/powerline.conf)"; then
+        ok "$(printf '%-20s' tmux)$_d_found"
     else
         step "tmux                 not shipped by this powerline (fine unless you use tmux)"
     fi
 
     head2 "configuration"
     if [ -L "$CONFIG_DST" ] || [ -L "$CONFIG_DST/config.json" ]; then
-        local target="$CONFIG_DST"
-        [ -L "$CONFIG_DST/config.json" ] && target="$CONFIG_DST/config.json"
-        warn "$target is a symlink -> $(readlink "$target")"
+        _d_target="$CONFIG_DST"
+        [ -L "$CONFIG_DST/config.json" ] && _d_target="$CONFIG_DST/config.json"
+        warn "$_d_target is a symlink -> $(readlink "$_d_target")"
         step "something else manages this config; see 'Already using the dotfiles repo' in the README"
-        notes=1
+        _d_notes=1
     elif [ -f "$CONFIG_DST/config.json" ]; then
         ok "config.json          $CONFIG_DST/config.json"
     else
-        warn "no config at $CONFIG_DST"; rc=1
+        warn "no config at $CONFIG_DST"; _d_rc=1
     fi
-    local rel
-    for rel in config.json colorschemes/default.json themes/shell/mine.json themes/shell/__main__.json; do
-        if [ ! -e "$CONFIG_DST/$rel" ]; then
-            warn "missing              $rel"; rc=1
-        elif ! files_same "$CONFIG_SRC/$rel" "$CONFIG_DST/$rel"; then
-            warn "differs from repo    $rel"; rc=1
+    _d_rel=""
+    for _d_rel in config.json colorschemes/default.json themes/shell/mine.json themes/shell/__main__.json; do
+        if [ ! -e "$CONFIG_DST/$_d_rel" ]; then
+            warn "missing              $_d_rel"; _d_rc=1
+        elif ! files_same "$CONFIG_SRC/$_d_rel" "$CONFIG_DST/$_d_rel"; then
+            warn "differs from repo    $_d_rel"; _d_rc=1
         fi
     done
 
     head2 "fonts"
     case "$OS" in
-        macos) fontdir="$HOME/Library/Fonts" ;;
-        *)     fontdir="$HOME/.local/share/fonts" ;;
+        macos) _d_fontdir="$HOME/Library/Fonts" ;;
+        *)     _d_fontdir="$HOME/.local/share/fonts" ;;
     esac
     # Counted with a glob rather than "ls | grep": ls fails on a missing
     # directory, and the patched filenames contain spaces ("Meslo LG S DZ
     # Regular for Powerline.ttf"), which a pipeline would split.
-    local n=0 f
-    for f in "$fontdir"/*[Pp]owerline*; do [ -e "$f" ] && n=$((n + 1)); done
-    if [ "$n" -gt 0 ]; then
-        ok "patched fonts        $n in $fontdir"
+    _d_n=0; _d_f=""
+    for _d_f in "$_d_fontdir"/*[Pp]owerline*; do [ -e "$_d_f" ] && _d_n=$((_d_n + 1)); done
+    if [ "$_d_n" -gt 0 ]; then
+        ok "patched fonts        $_d_n in $_d_fontdir"
     else
-        warn "no 'for Powerline' fonts in $fontdir"
+        warn "no 'for Powerline' fonts in $_d_fontdir"
         is_wsl && step "under WSL the fonts belong on the Windows host, not here"
-        rc=1
+        _d_rc=1
     fi
 
     printf '\n'
-    if [ "$rc" -ne 0 ]; then
+    if [ "$_d_rc" -ne 0 ]; then
         warn "see the warnings above"
-    elif [ "$notes" -ne 0 ]; then
+    elif [ "$_d_notes" -ne 0 ]; then
         ok "powerline is healthy; the config is managed from somewhere else (see above)"
     else
         ok "everything checks out"
     fi
-    return $rc
+    return $_d_rc
 }
 
 # -------------------------------------------------------- choosing how -------
@@ -488,7 +509,7 @@ select_mode() {
 
     [ -n "$MODE" ] && return 0
 
-    local reply
+    _sm_reply=""
     head2 "How should powerline be installed?"
     cat <<MENU
 
@@ -504,8 +525,8 @@ select_mode() {
 
 MENU
     printf 'Choose [1/2] (default 1): ' >&2
-    read -r reply || reply=""
-    case "$reply" in
+    read -r _sm_reply || _sm_reply=""
+    case "$_sm_reply" in
         2) MODE=native ;;
         *) MODE=pipx ;;
     esac
@@ -533,26 +554,26 @@ sudo_prefix() {
 # NixOS is declarative: telling the user what to declare is the whole job. Doing
 # it for them would mean editing configuration.nix, which is theirs.
 nixos_help() {
-    local pkgs="$1"
+    _nh_pkgs="$1"
     cat >&2 <<NIXHELP
 
     NixOS installs packages declaratively; this script will not do it for you.
 
     System-wide — /etc/nixos/configuration.nix:
 
-        environment.systemPackages = with pkgs; [ $pkgs ];
+        environment.systemPackages = with pkgs; [ $_nh_pkgs ];
 
       then:  sudo nixos-rebuild switch
 
     Per-user — Home Manager, ~/.config/home-manager/home.nix:
 
-        home.packages = with pkgs; [ $pkgs ];
+        home.packages = with pkgs; [ $_nh_pkgs ];
 
       then:  home-manager switch
 
     Just this once, declaring nothing:
 
-        nix-shell -p $pkgs --run '$0 --no-fonts'
+        nix-shell -p $_nh_pkgs --run '$0 --no-fonts'
 
 NIXHELP
 }
@@ -561,7 +582,7 @@ NIXHELP
 install_pipx() {
     command -v pipx >/dev/null 2>&1 && { ok "pipx already installed"; return 0; }
 
-    local SUDO; SUDO="$(sudo_prefix)"
+    _ipx_SUDO="$(sudo_prefix)"
     info "installing pipx"
     case "$OS" in
         macos)
@@ -570,11 +591,11 @@ install_pipx() {
             run brew install pipx ;;
         debian|ubuntu)
             # bookworm+ has "pipx"; bullseye and older only "python3-pipx".
-            run ${SUDO:+$SUDO} apt-get update || true
-            run ${SUDO:+$SUDO} apt-get install -y pipx \
-                || run ${SUDO:+$SUDO} apt-get install -y python3-pipx || true ;;
+            run ${_ipx_SUDO:+$_ipx_SUDO} apt-get update || true
+            run ${_ipx_SUDO:+$_ipx_SUDO} apt-get install -y pipx \
+                || run ${_ipx_SUDO:+$_ipx_SUDO} apt-get install -y python3-pipx || true ;;
         fedora)
-            run ${SUDO:+$SUDO} dnf install -y pipx || true ;;
+            run ${_ipx_SUDO:+$_ipx_SUDO} dnf install -y pipx || true ;;
         nixos)
             warn "pipx is not installed and NixOS installs declaratively"
             nixos_help "pipx"
@@ -602,9 +623,9 @@ install_pipx() {
 }
 
 install_powerline_pipx() {
-    local venv; venv="$(pipx_venv powerline-status)"
-    if [ -d "$venv" ]; then
-        ok "powerline already installed with pipx ($venv)"
+    _ipp_venv="$(pipx_venv powerline-status)"
+    if [ -d "$_ipp_venv" ]; then
+        ok "powerline already installed with pipx ($_ipp_venv)"
         return 0
     fi
     command -v pipx >/dev/null 2>&1 || { [ "$DRY_RUN" -eq 1 ] || return 1; }
@@ -619,7 +640,7 @@ install_powerline_pipx() {
     # rc files, and editing those is exactly what this script promises not to do.
     # The printed shell entry puts ~/.local/bin on PATH instead.
     run pipx install "$POWERLINE_SPEC" || { warn "pipx install failed"; return 1; }
-    ok "powerline installed into $venv"
+    ok "powerline installed into $_ipp_venv"
 }
 
 # powerline-gitstatus is a powerline *plugin*: the segment is imported by
@@ -627,8 +648,8 @@ install_powerline_pipx() {
 # that is depends entirely on how powerline was installed, which is why this is
 # not just "pip install".
 install_gitstatus_pipx() {
-    local venv; venv="$(pipx_venv powerline-status)"
-    if [ -x "$venv/bin/python" ] && "$venv/bin/python" -c 'import powerline_gitstatus' 2>/dev/null; then
+    _igp_venv="$(pipx_venv powerline-status)"
+    if [ -x "$_igp_venv/bin/python" ] && "$_igp_venv/bin/python" -c 'import powerline_gitstatus' 2>/dev/null; then
         ok "powerline-gitstatus already in the pipx venv"
         return 0
     fi
@@ -644,16 +665,16 @@ install_powerline_native() {
         ok "powerline already on PATH ($(command -v powerline-daemon))"
         return 0
     fi
-    local SUDO; SUDO="$(sudo_prefix)"
+    _ipn_SUDO="$(sudo_prefix)"
     case "$OS" in
         debian|ubuntu)
             info "installing powerline with apt"
-            run ${SUDO:+$SUDO} apt-get update || true
-            run ${SUDO:+$SUDO} apt-get install -y powerline \
+            run ${_ipn_SUDO:+$_ipn_SUDO} apt-get update || true
+            run ${_ipn_SUDO:+$_ipn_SUDO} apt-get install -y powerline \
                 || { warn "apt could not install powerline"; return 1; } ;;
         fedora)
             info "installing powerline with dnf"
-            run ${SUDO:+$SUDO} dnf install -y powerline \
+            run ${_ipn_SUDO:+$_ipn_SUDO} dnf install -y powerline \
                 || { warn "dnf could not install powerline"; return 1; } ;;
         nixos)
             warn "powerline is not installed and NixOS installs declaratively"
@@ -684,12 +705,12 @@ install_powerline_native() {
 # Fedora 38+) refuse. We say what to do and stop; writing into a
 # system-managed site-packages is the user's call, not this script's.
 install_gitstatus_native() {
-    local py; py="$(powerline_python)" || py="python3"
-    if "$py" -c 'import powerline_gitstatus' 2>/dev/null; then
-        ok "powerline-gitstatus already importable by $py"
+    _ign_py="$(powerline_python)" || _ign_py="python3"
+    if "$_ign_py" -c 'import powerline_gitstatus' 2>/dev/null; then
+        ok "powerline-gitstatus already importable by $_ign_py"
         return 0
     fi
-    local SUDO; SUDO="$(sudo_prefix)"
+    _ign_SUDO="$(sudo_prefix)"
 
     # Measured, because it is the opposite of what you would guess: Debian 12
     # and Ubuntu 24.04 DO package it (python3-powerline-gitstatus 1.3.2-1),
@@ -698,10 +719,10 @@ install_gitstatus_native() {
     # attempted regardless; a distro package is the only version that survives a
     # python upgrade.
     case "$OS" in
-        fedora)        run ${SUDO:+$SUDO} dnf install -y powerline-gitstatus 2>/dev/null || true ;;
-        debian|ubuntu) run ${SUDO:+$SUDO} apt-get install -y python3-powerline-gitstatus 2>/dev/null || true ;;
+        fedora)        run ${_ign_SUDO:+$_ign_SUDO} dnf install -y powerline-gitstatus 2>/dev/null || true ;;
+        debian|ubuntu) run ${_ign_SUDO:+$_ign_SUDO} apt-get install -y python3-powerline-gitstatus 2>/dev/null || true ;;
     esac
-    if [ "$DRY_RUN" -eq 0 ] && "$py" -c 'import powerline_gitstatus' 2>/dev/null; then
+    if [ "$DRY_RUN" -eq 0 ] && "$_ign_py" -c 'import powerline_gitstatus' 2>/dev/null; then
         ok "powerline-gitstatus installed from the distro"
         return 0
     fi
@@ -711,32 +732,32 @@ install_gitstatus_native() {
     # succeeds -- Fedora does not refuse --user installs the way Debian does.
     # Measured on fedora:41, where this is the difference between native mode
     # working and native mode giving up.
-    if ! "$py" -m pip --version >/dev/null 2>&1; then
+    if ! "$_ign_py" -m pip --version >/dev/null 2>&1; then
         # Announced only where there is actually a package manager to do it
         # with: on NixOS this said "installing the distro's pip package" and
         # then installed nothing, which is a plain untruth in the output.
         case "$OS" in
             fedora)
                 info "that python has no pip; installing python3-pip"
-                run ${SUDO:+$SUDO} dnf install -y python3-pip || true ;;
+                run ${_ign_SUDO:+$_ign_SUDO} dnf install -y python3-pip || true ;;
             debian|ubuntu)
                 info "that python has no pip; installing python3-pip"
-                run ${SUDO:+$SUDO} apt-get install -y python3-pip || true ;;
+                run ${_ign_SUDO:+$_ign_SUDO} apt-get install -y python3-pip || true ;;
             *)
                 step "that python has no pip, and there is no package recipe for '$OS'" ;;
         esac
     fi
 
     info "installing powerline-gitstatus with pip --user"
-    if run "$py" -m pip install --user powerline-gitstatus 2>/dev/null; then
+    if run "$_ign_py" -m pip install --user powerline-gitstatus 2>/dev/null; then
         ok "powerline-gitstatus installed"
         return 0
     fi
 
     warn "pip would not install powerline-gitstatus into the system python"
-    if ! "$py" -m pip --version >/dev/null 2>&1; then
+    if ! "$_ign_py" -m pip --version >/dev/null 2>&1; then
         # Fedora splits pip into python3-pip and the base image omits it.
-        step "That python has no pip at all ($py -m pip is missing)."
+        step "That python has no pip at all ($_ign_py -m pip is missing)."
         step "Install your distro's python3-pip, or use --mode=pipx."
     else
         step "This is PEP 668: your python is externally managed, so pip refuses to"
@@ -749,7 +770,7 @@ install_gitstatus_native() {
     step "  1. re-run with --mode=pipx, which sidesteps the system python entirely"
     step "  2. install your distro's package for it, if it has one"
     step "  3. accept the risk and override pip:"
-    step "       $py -m pip install --user --break-system-packages powerline-gitstatus"
+    step "       $_ign_py -m pip install --user --break-system-packages powerline-gitstatus"
     return 1
 }
 
@@ -763,12 +784,12 @@ apply_config() {
     # A symlinked config means something ELSE owns it -- the dotfiles repo stows
     # exactly these four files. Moving that link aside would silently detach the
     # machine from its dotfiles, so it needs saying out loud first.
-    local link_target=""
-    if [ -L "$CONFIG_DST" ]; then link_target="$(readlink "$CONFIG_DST")"
-    elif [ -L "$CONFIG_DST/config.json" ]; then link_target="$(readlink "$CONFIG_DST/config.json")"
+    _ac_link_target=""
+    if [ -L "$CONFIG_DST" ]; then _ac_link_target="$(readlink "$CONFIG_DST")"
+    elif [ -L "$CONFIG_DST/config.json" ]; then _ac_link_target="$(readlink "$CONFIG_DST/config.json")"
     fi
-    if [ -n "$link_target" ]; then
-        warn "$CONFIG_DST is managed by symlinks into $link_target"
+    if [ -n "$_ac_link_target" ]; then
+        warn "$CONFIG_DST is managed by symlinks into $_ac_link_target"
         step "that is another repo's stow (see the README); replacing it here would"
         step "detach this machine from it, and a later 'stow' there would fight back"
         if ! confirm "Replace the symlinked config with a copy from this repo?"; then
@@ -778,25 +799,27 @@ apply_config() {
     fi
 
     info "installing config into $CONFIG_DST"
-    local rel src dst
-    while IFS= read -r rel; do
-        rel="${rel#./}"
-        [ -n "$rel" ] || continue
-        src="$CONFIG_SRC/$rel"
-        dst="$CONFIG_DST/$rel"
-        if [ -e "$dst" ] || [ -L "$dst" ]; then
-            if [ ! -L "$dst" ] && files_same "$src" "$dst"; then
-                step "unchanged  $rel"
+    _ac_rel=""; _ac_src=""; _ac_dst=""
+    while IFS= read -r _ac_rel; do
+        _ac_rel="${_ac_rel#./}"
+        [ -n "$_ac_rel" ] || continue
+        _ac_src="$CONFIG_SRC/$_ac_rel"
+        _ac_dst="$CONFIG_DST/$_ac_rel"
+        if [ -e "$_ac_dst" ] || [ -L "$_ac_dst" ]; then
+            if [ ! -L "$_ac_dst" ] && files_same "$_ac_src" "$_ac_dst"; then
+                step "unchanged  $_ac_rel"
                 continue
             fi
-            run mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
-            run mv "$dst" "$BACKUP_DIR/$rel"
-            step "backed up  $rel -> $BACKUP_DIR/$rel"
+            run mkdir -p "$BACKUP_DIR/$(dirname "$_ac_rel")"
+            run mv "$_ac_dst" "$BACKUP_DIR/$_ac_rel"
+            step "backed up  $_ac_rel -> $BACKUP_DIR/$_ac_rel"
         fi
-        run mkdir -p "$(dirname "$dst")"
-        run cp "$src" "$dst"
-        step "installed  $rel"
-    done < <(cd "$CONFIG_SRC" && find . -type f -name '*.json')
+        run mkdir -p "$(dirname "$_ac_dst")"
+        run cp "$_ac_src" "$_ac_dst"
+        step "installed  $_ac_rel"
+    done <<EOF
+$( cd "$CONFIG_SRC" && find . -type f -name '*.json' )
+EOF
     ok "config applied"
     [ -d "$BACKUP_DIR" ] && step "what was there before is in $BACKUP_DIR"
     return 0
@@ -857,17 +880,17 @@ install_fonts() {
     else
         info "installing all patched fonts from $FONTS_REPO"
     fi
-    local tmp
+    _if_tmp=""
     if [ "$DRY_RUN" -eq 1 ]; then
         step "would run: git clone --depth=1 $FONTS_REPO <tmp> && <tmp>/install.sh ${FONTS:-(all)}"
         return 0
     fi
-    tmp="$(mktemp -d "${TMPDIR:-/tmp}/powerline-fonts.XXXXXX")" || { warn "could not create a temp dir"; return 1; }
+    _if_tmp="$(mktemp -d "${TMPDIR:-/tmp}/powerline-fonts.XXXXXX")" || { warn "could not create a temp dir"; return 1; }
     # shellcheck disable=SC2064
-    trap "rm -rf '$tmp'" EXIT
-    if ! git clone --depth=1 --quiet "$FONTS_REPO" "$tmp/fonts"; then
+    trap "rm -rf '$_if_tmp'" EXIT
+    if ! git clone --depth=1 --quiet "$FONTS_REPO" "$_if_tmp/fonts"; then
         warn "could not clone $FONTS_REPO — skipping fonts"
-        rm -rf "$tmp"; trap - EXIT
+        rm -rf "$_if_tmp"; trap - EXIT
         return 1
     fi
     # The fonts repo's own installer creates the directory on Linux but not on
@@ -877,8 +900,8 @@ install_fonts() {
         macos) mkdir -p "$HOME/Library/Fonts" ;;
         *)     mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/fonts" ;;
     esac
-    sh "$tmp/fonts/install.sh" "$FONTS" || warn "the font installer reported a problem"
-    rm -rf "$tmp"; trap - EXIT
+    sh "$_if_tmp/fonts/install.sh" "$FONTS" || warn "the font installer reported a problem"
+    rm -rf "$_if_tmp"; trap - EXIT
     ok "fonts installed"
 }
 
@@ -892,13 +915,13 @@ install_fonts() {
 # bindings path embeds the python version, so a python upgrade moves it; the
 # note below says so, and --check reports it.
 print_shell_entry() {
-    local daemon bash_b zsh_b tmux_b
-    daemon="$(find_daemon)" || daemon=""
-    bash_b="$(find_binding bash/powerline.sh)" || bash_b=""
-    zsh_b="$(find_binding zsh/powerline.zsh)" || zsh_b=""
-    tmux_b="$(find_binding tmux/powerline.conf)" || tmux_b=""
+    _pse_daemon=""; _pse_bash_b=""; _pse_zsh_b=""; _pse_tmux_b=""
+    _pse_daemon="$(find_daemon)" || _pse_daemon=""
+    _pse_bash_b="$(find_binding bash/powerline.sh)" || _pse_bash_b=""
+    _pse_zsh_b="$(find_binding zsh/powerline.zsh)" || _pse_zsh_b=""
+    _pse_tmux_b="$(find_binding tmux/powerline.conf)" || _pse_tmux_b=""
 
-    if [ -z "$daemon" ] || { [ -z "$bash_b" ] && [ -z "$zsh_b" ]; }; then
+    if [ -z "$_pse_daemon" ] || { [ -z "$_pse_bash_b" ] && [ -z "$_pse_zsh_b" ]; }; then
         head2 "Next step"
         warn "powerline's shell bindings were not found, so there is no entry to suggest yet"
         step "run './install.sh --check' once powerline is installed to get it"
@@ -910,31 +933,31 @@ print_shell_entry() {
 Nothing was written to any rc file. Paste the block for the shell you use.
 INTRO
 
-    if [ -z "$bash_b" ]; then
+    if [ -z "$_pse_bash_b" ]; then
         printf '\n%s# bash: no bash binding found in this install%s\n' "$C_YLW" "$C_RST"
     else
         printf '\n%s~/.bashrc%s\n\n' "$C_B" "$C_RST"
         printf '    # Powerline\n'
         # shellcheck disable=SC2016  # $HOME stays literal: this is printed, not run
         [ "$MODE" = pipx ] && printf '    [ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"\n'
-        printf '    if [ -r "%s" ]; then\n' "$bash_b"
-        printf '        "%s" -q\n' "$daemon"
+        printf '    if [ -r "%s" ]; then\n' "$_pse_bash_b"
+        printf '        "%s" -q\n' "$_pse_daemon"
         printf '        POWERLINE_BASH_CONTINUATION=1\n'
         printf '        POWERLINE_BASH_SELECT=1\n'
-        printf '        source "%s"\n' "$bash_b"
+        printf '        source "%s"\n' "$_pse_bash_b"
         printf '    fi\n'
     fi
 
-    if [ -z "$zsh_b" ]; then
+    if [ -z "$_pse_zsh_b" ]; then
         printf '\n%s# zsh: no zsh binding found in this install%s\n' "$C_YLW" "$C_RST"
     else
         printf '\n%s~/.zshrc%s\n\n' "$C_B" "$C_RST"
         printf '    # Powerline\n'
         # shellcheck disable=SC2016  # $HOME stays literal: this is printed, not run
         [ "$MODE" = pipx ] && printf '    [ -d "$HOME/.local/bin" ] && export PATH="$HOME/.local/bin:$PATH"\n'
-        printf '    if [ -r "%s" ]; then\n' "$zsh_b"
-        printf '        "%s" -q\n' "$daemon"
-        printf '        source "%s"\n' "$zsh_b"
+        printf '    if [ -r "%s" ]; then\n' "$_pse_zsh_b"
+        printf '        "%s" -q\n' "$_pse_daemon"
+        printf '        source "%s"\n' "$_pse_zsh_b"
         printf '    fi\n'
         printf '\n    %s# zsh only: a prompt theme loaded AFTER this wins. Oh My Zsh with%s\n' "$C_YLW" "$C_RST"
         printf '    %s# ZSH_THEME set (Powerlevel10k, agnoster, ...) replaces the powerline%s\n' "$C_YLW" "$C_RST"
@@ -942,9 +965,9 @@ INTRO
         printf '    %s# or pick one of the two.%s\n' "$C_YLW" "$C_RST"
     fi
 
-    if [ -n "$tmux_b" ]; then
+    if [ -n "$_pse_tmux_b" ]; then
         printf '\n%s~/.config/tmux/tmux.conf%s   (or ~/.tmux.conf)\n\n' "$C_B" "$C_RST"
-        printf '    source "%s"\n' "$tmux_b"
+        printf '    source "%s"\n' "$_pse_tmux_b"
         printf '\n    %s# Using Oh my tmux!? Put it in tmux.conf.local instead — tmux.conf there%s\n' "$C_YLW" "$C_RST"
         printf '    %s# is the upstream file and is overwritten on update.%s\n' "$C_YLW" "$C_RST"
     fi
@@ -960,12 +983,12 @@ OUTRO
 }
 
 restart_daemon() {
-    local daemon; daemon="$(find_daemon)" || return 0
+    _rd_daemon="$(find_daemon)" || return 0
     info "restarting the powerline daemon"
     # --replace rather than a bare start: a daemon from a previous install is
     # already running with the OLD config cached, so without this the prompt
     # keeps rendering the pre-install theme and the script looks like it failed.
-    run "$daemon" --replace -q || warn "could not restart the daemon — it starts on your next shell anyway"
+    run "$_rd_daemon" --replace -q || warn "could not restart the daemon — it starts on your next shell anyway"
 }
 
 # ----------------------------------------------------------------- main ------
@@ -981,14 +1004,14 @@ main() {
     select_mode
 
     head2 "powerline"
-    local pl_ok=1
+    _m_pl_ok=1
     case "$MODE" in
         pipx)
-            install_pipx       && install_powerline_pipx   && install_gitstatus_pipx   || pl_ok=0 ;;
+            install_pipx       && install_powerline_pipx   && install_gitstatus_pipx   || _m_pl_ok=0 ;;
         native)
-            install_powerline_native && install_gitstatus_native || pl_ok=0 ;;
+            install_powerline_native && install_gitstatus_native || _m_pl_ok=0 ;;
     esac
-    [ "$pl_ok" -eq 1 ] || warn "powerline is not fully installed — see above; the rest still runs"
+    [ "$_m_pl_ok" -eq 1 ] || warn "powerline is not fully installed — see above; the rest still runs"
 
     if [ "$DO_CONFIG" -eq 1 ]; then
         head2 "configuration"
@@ -1007,7 +1030,7 @@ main() {
     printf '\n'
     if [ "$DRY_RUN" -eq 1 ]; then
         ok "dry run finished — nothing was changed"
-    elif [ "$pl_ok" -eq 1 ]; then
+    elif [ "$_m_pl_ok" -eq 1 ]; then
         ok "done. './install.sh --check' verifies the result."
     else
         warn "finished with problems — './install.sh --check' lists what is still missing"

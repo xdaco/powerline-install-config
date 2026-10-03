@@ -24,6 +24,11 @@ tracked source.
 
 ![What you get](powerline-prompt.png "What you get")
 
+`install.sh` is **POSIX sh** — no bashisms, verified with `checkbashisms` and
+`shellcheck -s sh`, and exercised under `dash` and busybox `ash` as well as
+bash. It needs no bash at all: the full suite passes on Alpine, which ships
+none.
+
 ## How powerline gets installed
 
 The script detects the OS and asks. Either answer ends with the same prompt;
@@ -185,6 +190,67 @@ whether `powerline_gitstatus` actually imports in the python that renders the
 prompt, whether each shell binding is where the printed entry says, whether the
 config under `~` still matches this repo, and whether a patched font is
 installed. Exits non-zero on a real problem.
+
+## Portability
+
+`install.sh` and `tests/test-install.sh` are strict POSIX shell: no `local`, no
+arrays, no `[[`, no process substitution, no `$'...'`, no `pipefail`. Function
+variables are prefixed per function (`_fb_`, `_ac_`, `_d_`…) instead of scoped,
+which is the price of dropping `local`.
+
+Verified three ways, not just asserted:
+
+| | |
+| --- | --- |
+| `checkbashisms -f install.sh` | clean |
+| `shellcheck -s sh install.sh` | clean |
+| run under `dash`, busybox `ash`, bash | full suite passes |
+
+Only `#!/bin/sh` is required. Everything else used is POSIX plus `mktemp` and
+`find`, which every target ships.
+
+## Testing
+
+`tests/test-install.sh` runs eleven checks against a real install: `--check` on
+a bare machine, the no-TTY refusal, the install itself, `--check` afterwards,
+all four config files byte-compared, **a real prompt rendered**, the printed
+shell entry located, and a re-run proving idempotency.
+
+It installs packages and writes to `$HOME`, so run it in a container:
+
+```bash
+podman run --rm -v "$PWD:/repo:ro" docker.io/library/ubuntu:24.04 sh -c '
+  apt-get update -qq && apt-get install -y -qq git ca-certificates
+  cp -R /repo /work && cd /work && sh tests/test-install.sh pipx'
+```
+
+Swap `pipx` for `native`, and the image for `debian:12`, `fedora:41` or
+`alpine:3`. Current results:
+
+| | pipx | native |
+| --- | --- | --- |
+| Ubuntu 24.04 | 11/11 | 11/11 |
+| Debian 12 | 11/11 | 11/11 |
+| Fedora 41 | 11/11 | 11/11 |
+| Alpine 3 (busybox ash, no bash) | 11/11 | n/a — no apk recipe |
+| macOS | 11/11 | → pipx |
+| NixOS | reports declaratively, exits non-zero | same |
+
+Alpine is not a supported target — there is no `apk` branch, so it is detected
+as generic `linux` — but `--mode=pipx` works there, which is what the suite
+covers.
+
+## Regenerating the screenshot
+
+`powerline-prompt.png` is rendered from powerline's own ANSI output, so it shows
+the real prompt rather than a mock-up. After changing the config:
+
+```bash
+powerline shell left --last-exit-code=0 --jobnum=0 | python3 tools/screenshot.py > prompt.svg
+rsvg-convert -z 2 -o powerline-prompt.png prompt.svg
+```
+
+Run it from inside a git repository, or the gitstatus segment will not appear.
 
 ## Options
 
